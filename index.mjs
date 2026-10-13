@@ -74,15 +74,20 @@ export function walk(root, { maxFiles = 20000, ignore = [] } = {}) {
         if (ignoreList.some((re) => re.test(rel))) continue;
         let st;
         try { st = statSync(full); } catch { continue; }
+        // 注意：path.extname('.env') 返回空串 —— dotfile 用整个文件名当「扩展名」，
+        // 否则规则里写 exts: ['.env'] 永远匹配不上（2026-10-13 实测）
+        const rawExt = extname(e.name).toLowerCase();
+        const dotfileName = e.name.startsWith('.') && !rawExt ? e.name.toLowerCase() : '';
         files.push({
           path: rel,
           abs: full,
           size: st.size,
-          ext: extname(e.name).toLowerCase(),
+          ext: rawExt || dotfileName,
           mode: st.mode,
-          isText: TEXT_EXT.has(extname(e.name).toLowerCase()) ||
+          isText: TEXT_EXT.has(rawExt || dotfileName) ||
                   basename(e.name).startsWith('.env') ||
-                  basename(e.name).startsWith('.npmrc'),
+                  basename(e.name).startsWith('.npmrc') ||
+                  basename(e.name).startsWith('.gitignore'),
         });
       }
     }
