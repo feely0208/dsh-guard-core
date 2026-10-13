@@ -82,6 +82,7 @@ export function walk(root, { maxFiles = 20000, ignore = [] } = {}) {
           path: rel,
           abs: full,
           size: st.size,
+          mtime: st.mtimeMs,
           ext: rawExt || dotfileName,
           mode: st.mode,
           isText: TEXT_EXT.has(rawExt || dotfileName) ||
@@ -330,6 +331,29 @@ const CHECKS = {
         file: `node_modules/${d.name}/package.json`, line: 0,
         evidence: `${d.name}@${pj.version || '?'} 有脚本：${hit.join(', ')}`,
       });
+    }
+    return out;
+  },
+
+  /**
+   * 文件年龄检查 —— 密钥/证书这类**有轮换周期要求**的文件。
+   * check 支持：paths（glob）、maxDays（超过则报）、minSize（小于视为占位文件，跳过）
+   */
+  'file-age'(ctx) {
+    const { paths = [], maxDays = 365, minSize = 0 } = ctx.rule.check;
+    const out = [];
+    const now = Date.now();
+    const pathRes = paths.map(globToRe);
+    for (const f of ctx.files) {
+      if (!pathRes.some((re) => re.test(f.path))) continue;
+      if (f.size < minSize) continue;              // 占位/示例文件不算
+      const days = Math.floor((now - (f.mtime || now)) / 86400000);
+      if (days > maxDays) {
+        out.push({
+          file: f.path, line: 0,
+          evidence: `${days} 天未更新（上限 ${maxDays} 天）`,
+        });
+      }
     }
     return out;
   },
