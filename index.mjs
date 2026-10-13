@@ -14,7 +14,7 @@
  *  3. **敏感值默认打码** —— 输出里绝不出现完整密钥/身份证等原值。
  */
 
-import { readdirSync, readFileSync, statSync, existsSync } from 'node:fs';
+import { readdirSync, readFileSync, statSync, existsSync, openSync, readSync, closeSync } from 'node:fs';
 import { join, relative, extname, basename } from 'node:path';
 
 // ── 默认跳过的目录 ────────────────────────────────────────────────
@@ -78,6 +78,13 @@ export function walk(root, { maxFiles = 20000, ignore = [] } = {}) {
         // 否则规则里写 exts: ['.env'] 永远匹配不上（2026-10-13 实测）
         const rawExt = extname(e.name).toLowerCase();
         const dotfileName = e.name.startsWith('.') && !rawExt ? e.name.toLowerCase() : '';
+        // 无扩展名文件（Dockerfile / Makefile / LICENSE …）也要当文本读 ——
+        // 2026-10-13 踩过：Dockerfile 因为没扩展名被跳过，容器安全检查完全没生效。
+        // 用「前 512 字节有没有 NUL」判断，避免把二进制当文本。
+        let noExtText = false;
+        if (!rawExt && !dotfileName && st.size > 0 && st.size < MAX_FILE_BYTES) {
+          noExtText = looksLikeText(full);
+        }
         files.push({
           path: rel,
           abs: full,
@@ -85,7 +92,7 @@ export function walk(root, { maxFiles = 20000, ignore = [] } = {}) {
           mtime: st.mtimeMs,
           ext: rawExt || dotfileName,
           mode: st.mode,
-          isText: TEXT_EXT.has(rawExt || dotfileName) ||
+          isText: noExtText || TEXT_EXT.has(rawExt || dotfileName) ||
                   basename(e.name).startsWith('.env') ||
                   basename(e.name).startsWith('.npmrc') ||
                   basename(e.name).startsWith('.gitignore'),
@@ -539,6 +546,20 @@ function pickLicense(l) {
 }
 
 // ── 工具 ──────────────────────────────────────────────────────────
+
+/** 无扩展名文件的文本判定：前 512 字节没有 NUL 就认为是文本 */
+function looksLikeText(abs) {
+  try {
+    const buf = Buffer.alloc(512);
+    const fd = openSync(abs, 'r');
+    const n = readSync(fd, buf, 0, 512, 0);
+    closeSync(fd);
+    for (let i = 0; i < n; i++) if (buf[i] === 0) return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 /** 身份证校验位：GB 11643-1999，17 位加权和 mod 11 → 对照表 */
 function validIdCard(id) {
