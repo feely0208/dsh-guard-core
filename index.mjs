@@ -238,6 +238,59 @@ const CHECKS = {
   },
 
   /**
+   * 个人敏感信息扫描（PII）。
+   *
+   * ── 为什么必须带校验和 ──────────────────────────────────────────
+   * 纯正则找手机号/身份证**误报率极高**（订单号、时间戳、随机 ID 都像）。
+   * 安全工具最大的杀手就是误报 —— 用户被烦几次就卸载。
+   * 所以这里对每个类型都做**结构校验 + 校验位验证**：
+   *   身份证  GB 11643-1999 加权校验位（17 位加权和 mod 11）
+   *   银行卡  Luhn 算法
+   *   手机号  号段白名单 + 边界断言（防止从长数字里截一段）
+   *
+   * ── 输出永远不落原值 ────────────────────────────────────────────
+   * 只记「哪个文件哪一行、什么类型、第几个」—— 记原值等于工具自己成了泄露源。
+   */
+  'pii-scan'(ctx) {
+    const TYPES = {
+      '身份证': { re: /(?<![0-9])[1-9][0-9]{5}(?:19|20)[0-9]{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12][0-9]|3[01])[0-9]{3}[0-9Xx](?![0-9])/g, validate: validIdCard },
+      '银行卡': { re: /(?<![0-9])(?:62|4[0-9]{2}|5[1-5][0-9]{2}|3[47][0-9]{2})[0-9]{8,15}(?![0-9])/g, validate: luhn },
+      '手机号': { re: /(?<![0-9])(?:\+?86[-\s]?)?1(?:3[0-9]|4[5-9]|5[0-35-9]|6[2567]|7[0-8]|8[0-9]|9[0-35-9])[0-9]{8}(?![0-9])/g, validate: null },
+      '邮箱':   { re: /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, validate: null },
+      'IPv4私网': { re: /(?<![0-9])(?:10\.[0-9]{1,3}|172\.(?:1[6-9]|2[0-9]|3[01])\.[0-9]{1,3}|192\.168\.[0-9]{1,3})\.[0-9]{1,3}(?![0-9])/g, validate: null },
+    };
+    const { types = Object.keys(TYPES), paths, exts, max = 100 } = ctx.rule.check;
+    const out = [];
+    const pathRes = (paths || []).map(globToRe);
+    for (const f of ctx.files) {
+      if (pathRes.length && !pathRes.some((re) => re.test(f.path))) continue;
+      if (exts && !exts.includes(f.ext)) continue;
+      const text = readText(f);
+      if (text == null) continue;
+      const lines = text.split('\n');
+      for (const t of types) {
+        const spec = TYPES[t];
+        if (!spec) continue;
+        for (let i = 0; i < lines.length; i++) {
+          const line = lines[i];
+          if (isCommentLine(line)) continue;              // 注释里的示例不算
+          const re = new RegExp(spec.re.source, spec.re.flags);
+          let m;
+          while ((m = re.exec(line)) !== null) {
+            if (spec.validate && !spec.validate(m[0].replace(/[-\s]/g, ''))) continue;
+            out.push({
+              file: f.path, line: i + 1,
+              evidence: `${t}（已打码：${mask(m[0].replace(/[-\s]/g, ''))}）`,
+            });
+            if (out.length >= max) return out;
+          }
+        }
+      }
+    }
+    return out;
+  },
+
+  /**
    * 依赖的生命周期脚本（preinstall / install / postinstall）——
    * **这是 npm 投毒最主要的载体**：装包时就执行任意代码，不需要你 import 它。
    * check 支持：hook（默认全部）、allow（白名单包名）
@@ -432,6 +485,34 @@ function pickLicense(l) {
 }
 
 // ── 工具 ──────────────────────────────────────────────────────────
+
+/** 身份证校验位：GB 11643-1999，17 位加权和 mod 11 → 对照表 */
+function validIdCard(id) {
+  if (!/^[0-9]{17}[0-9Xx]$/.test(id)) return false;
+  const W = [7, 9, 10, 5, 8, 4, 2, 1, 6, 3, 7, 9, 10, 5, 8, 4, 2];
+  const C = '10X98765432';
+  let sum = 0;
+  for (let i = 0; i < 17; i++) sum += Number(id[i]) * W[i];
+  return C[sum % 11] === id[17].toUpperCase();
+}
+
+/** Luhn 校验（银行卡）*/
+function luhn(num) {
+  if (!/^[0-9]{12,19}$/.test(num)) return false;
+  let sum = 0, alt = false;
+  for (let i = num.length - 1; i >= 0; i--) {
+    let d = Number(num[i]);
+    if (alt) { d *= 2; if (d > 9) d -= 9; }
+    sum += d; alt = !alt;
+  }
+  return sum % 10 === 0;
+}
+
+/** 注释行（避免把示例/文档里的假数据当命中）*/
+function isCommentLine(line) {
+  const t = line.trim();
+  return t.startsWith('//') || t.startsWith('#') || t.startsWith('*') || t.startsWith('/*') || t.startsWith('<!--');
+}
 
 /** 找第一个匹配的行号（1-based），找不到返回 0 */
 function firstMatchLine(text, re) {
