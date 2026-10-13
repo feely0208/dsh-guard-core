@@ -102,15 +102,49 @@ export function readText(file) {
 //   ctx = { root, files, rule, readText, helpers }
 
 const CHECKS = {
-  /** 文件内容正则匹配 */
+  /**
+   * 文件内容正则匹配。
+   * check 支持：
+   *   pattern       必填，正则
+   *   flags         可选，默认 'g'
+   *   exts          可选，只扫这些扩展名
+   *   paths         可选，只扫匹配这些 glob 的文件（2026-10-13 加，CI 规则需要限定 .github/workflows/）
+   *   allOf         可选，多个正则必须**在同一文件里全部命中**才算（用于组合条件）
+   *   exclude       可选，排除匹配这些正则的文件
+   */
   'file-pattern'(ctx) {
     const out = [];
-    const pat = new RegExp(ctx.rule.check.pattern, ctx.rule.check.flags || 'g');
-    const exts = ctx.rule.check.exts;
+    const { pattern, flags = 'g', exts, paths, allOf, exclude, max = 50 } = ctx.rule.check;
+    const pathRes = (paths || []).map(globToRe);
+    const exRes = (exclude || []).map((p) => new RegExp(p));
     for (const f of ctx.files) {
       if (exts && !exts.includes(f.ext)) continue;
+      if (pathRes.length && !pathRes.some((re) => re.test(f.path))) continue;
       const text = readText(f);
       if (text == null) continue;
+      if (exRes.some((re) => re.test(text))) continue;
+      // allOf：多个模式必须同文件全中
+      if (allOf && allOf.length) {
+        const all = allOf.every((p) => new RegExp(p, flags).test(text));
+        if (!all) continue;
+        const hitLine = firstMatchLine(text, new RegExp(pattern, flags.replace('g', '')));
+        out.push({ file: f.path, line: hitLine, evidence: allOf.join(' + ') });
+        if (out.length >= max) return out;
+        continue;
+      }
+      // wholeFile：跨行匹配（如 "run: 到 200 字符内出现 ${{ github.event }}"）
+      if (ctx.rule.check.wholeFile) {
+        const pat = new RegExp(pattern, flags.includes('g') ? flags : flags + 'g');
+        let m;
+        while ((m = pat.exec(text)) !== null) {
+          const line = text.slice(0, m.index).split('\n').length;
+          out.push({ file: f.path, line, evidence: m[0].replace(/\s+/g, ' ').slice(0, 120) });
+          if (out.length >= max) return out;
+          if (m.index === pat.lastIndex) pat.lastIndex++; // 防零宽死循环
+        }
+        continue;
+      }
+      const pat = new RegExp(pattern, flags);
       const lines = text.split('\n');
       for (let i = 0; i < lines.length; i++) {
         pat.lastIndex = 0;
@@ -121,7 +155,7 @@ const CHECKS = {
           evidence: ctx.mask ? ctx.mask(m[0]) : m[0],
           excerpt: lines[i].trim().slice(0, 120),
         });
-        if (out.length >= (ctx.rule.check.max || 50)) return out;
+        if (out.length >= max) return out;
       }
     }
     return out;
@@ -189,6 +223,64 @@ const CHECKS = {
       });
       if (matched) {
         out.push({ file: d.manifest, line: 0, evidence: `${d.name}@${d.version} —— ${d.license}` });
+      }
+    }
+    return out;
+  },
+
+  /**
+   * 依赖的生命周期脚本（preinstall / install / postinstall）——
+   * **这是 npm 投毒最主要的载体**：装包时就执行任意代码，不需要你 import 它。
+   * check 支持：hook（默认全部）、allow（白名单包名）
+   */
+  'dependency-script'(ctx) {
+    const { hooks = ['preinstall', 'install', 'postinstall'], allow = [] } = ctx.rule.check;
+    const out = [];
+    const nm = join(ctx.root, 'node_modules');
+    if (!existsSync(nm)) return out; // 没装依赖 —— 由别的规则报「没 lockfile」
+    const allowSet = new Set(allow.map((x) => x.toLowerCase()));
+    const dirs = [];
+    let top = [];
+    try { top = readdirSync(nm, { withFileTypes: true }); } catch { return out; }
+    for (const e of top) {
+      if (!e.isDirectory() || e.name.startsWith('.')) continue;
+      if (e.name.startsWith('@')) {
+        let sub = [];
+        try { sub = readdirSync(join(nm, e.name), { withFileTypes: true }); } catch { /* */ }
+        for (const s2 of sub) if (s2.isDirectory()) dirs.push({ name: `${e.name}/${s2.name}`, dir: join(nm, e.name, s2.name) });
+      } else {
+        dirs.push({ name: e.name, dir: join(nm, e.name) });
+      }
+    }
+    for (const d of dirs) {
+      if (allowSet.has(d.name.toLowerCase())) continue;
+      let pj;
+      try { pj = JSON.parse(readFileSync(join(d.dir, 'package.json'), 'utf-8')); } catch { continue; }
+      const scripts = pj.scripts || {};
+      const hit = hooks.filter((h) => scripts[h]);
+      if (!hit.length) continue;
+      out.push({
+        file: `node_modules/${d.name}/package.json`, line: 0,
+        evidence: `${d.name}@${pj.version || '?'} 有脚本：${hit.join(', ')}`,
+      });
+    }
+    return out;
+  },
+
+  /**
+   * 文件必须不含某模式（整文件判断，只报一条）。
+   * 用于「没声明 X 就报警」这类 —— 逐行测会每行都命中。
+   */
+  'file-lacks'(ctx) {
+    const { pattern, flags = 's', paths, mustExist = false } = ctx.rule.check;
+    const out = [];
+    const pathRes = (paths || []).map(globToRe);
+    for (const f of ctx.files) {
+      if (pathRes.length && !pathRes.some((re) => re.test(f.path))) continue;
+      const text = readText(f);
+      if (text == null) continue;
+      if (!new RegExp(pattern, flags).test(text)) {
+        out.push({ file: f.path, line: 0, evidence: ctx.rule.check.evidence || `未找到：${pattern}` });
       }
     }
     return out;
@@ -331,6 +423,13 @@ function pickLicense(l) {
 }
 
 // ── 工具 ──────────────────────────────────────────────────────────
+
+/** 找第一个匹配的行号（1-based），找不到返回 0 */
+function firstMatchLine(text, re) {
+  const lines = text.split('\n');
+  for (let i = 0; i < lines.length; i++) if (re.test(lines[i])) return i + 1;
+  return 0;
+}
 
 export function globToRe(g) {
   const esc = g.replace(/[.+^${}()|[\]\\]/g, '\\$&')
