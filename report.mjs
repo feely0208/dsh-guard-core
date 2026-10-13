@@ -73,6 +73,11 @@ export function textReport({ findings, stats, meta = {} }) {
 /** HTML 报告（可截图、可存档）*/
 export function htmlReport({ findings, stats, meta = {} }) {
   const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  // 规则文案里允许用 **加粗** 和 `代码` —— 先转义再从安全子集转回来，
+  // 否则截图里会出现一堆字面 **（2026-10-13 实测发现）
+  const md = (s) => esc(s)
+    .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
+    .replace(/`([^`]+)`/g, '<code>$1</code>');
   const sev = stats.bySeverity || {};
   const chips = SEV_ORDER.filter((s) => sev[s]).map((s) =>
     `<span class="chip" style="--c:${SEV_COLOR[s]}">${SEVERITY_LABEL[s]} <b>${sev[s]}</b></span>`).join('');
@@ -80,9 +85,9 @@ export function htmlReport({ findings, stats, meta = {} }) {
   const rows = findings.map((f) => `
       <tr class="sev-${f.severity}">
         <td><span class="dot" style="--c:${SEV_COLOR[f.severity]}"></span>${SEVERITY_LABEL[f.severity]}</td>
-        <td><div class="t">${esc(f.title)}</div><div class="src">${esc(f.source)}</div></td>
-        <td><code>${esc(f.line ? f.file + ':' + f.line : f.file)}</code><div class="ev">${esc(f.evidence)}</div></td>
-        <td class="adv">${esc(f.advice)}</td>
+        <td><div class="t">${md(f.title)}</div><div class="src">${md(f.source)}</div></td>
+        <td><code>${esc(f.line ? f.file + ':' + f.line : f.file)}</code><div class="ev">${md(f.evidence)}</div></td>
+        <td class="adv">${md(f.advice)}</td>
       </tr>`).join('');
 
   return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
