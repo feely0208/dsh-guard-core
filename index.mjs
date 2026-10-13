@@ -37,9 +37,12 @@ const TEXT_EXT = new Set([
 /** 单文件读取上限（超过不读内容，避免大文件拖慢）*/
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
 
+// 注意：**不要**把 lockfile 放进来。
+// 2026-10-13 踩过：package-lock.json 被排除 → file-exists 以为它不存在 →
+// 明明有 lockfile 却报「没有 lockfile」（误报），且依赖检查也读不到。
+// 「文件是否存在」是文件系统问题，不该受扫描器忽略规则影响。
 const DEFAULT_IGNORE = [
   /^\.git\//, /^node_modules\//, /\.min\.(js|css)$/,
-  /package-lock\.json$/, /pnpm-lock\.yaml$/, /yarn\.lock$/,
 ];
 
 // ── 扫描 ──────────────────────────────────────────────────────────
@@ -164,10 +167,16 @@ const CHECKS = {
   /** 文件存在性（存在则命中，或 require:true 表示不存在则命中）*/
   'file-exists'(ctx) {
     const { globs, require: req } = ctx.rule.check;
-    const hit = globs.map((g) => {
+    // 先用文件系统直接判断（非 glob 的精确文件名）—— 不依赖扫描结果
+    const hit = [];
+    for (const g of globs) {
+      if (!/[*?]/.test(g)) {
+        if (existsSync(join(ctx.root, g))) hit.push(g);
+        continue;
+      }
       const re = globToRe(g);
-      return ctx.files.filter((f) => re.test(f.path)).map((f) => f.path);
-    }).flat();
+      for (const f of ctx.files) if (re.test(f.path)) hit.push(f.path);
+    }
     if (req) {
       // 「必须存在」类：**整组只报一条**（2026-10-12 修复：
       // 原来 4 个 glob 各报一条，同一个问题报了 4 遍）
