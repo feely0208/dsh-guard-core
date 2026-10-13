@@ -359,6 +359,31 @@ const CHECKS = {
   },
 
   /**
+   * 「整组文件里都没有这个模式」—— 报一次。
+   * 与 file-lacks 的区别：file-lacks 是「每个匹配到的文件各判一次」；
+   * 这个用于「找不到某说明/某配置」——**文件根本不存在也算**（2026-07-13 场景：
+   * 仓库里没有 README 提到密钥轮换，也该报）。
+   */
+  'files-lack'(ctx) {
+    const { pattern, flags = 'i', paths = [] } = ctx.rule.check;
+    const res = paths.map(globToRe);
+    const matched = ctx.files.filter((f) => res.some((re) => re.test(f.path)));
+    const re = new RegExp(pattern, flags);
+    const found = matched.some((f) => {
+      const t = readText(f);
+      return t != null && re.test(t);
+    });
+    if (found) return [];
+    return [{
+      file: paths[0] || '(全局)',
+      line: 0,
+      evidence: matched.length
+        ? `已检查 ${matched.length} 个文件，均未提到`
+        : `以下文件都不存在：${paths.slice(0, 3).join(' / ')}${paths.length > 3 ? ' …' : ''}`,
+    }];
+  },
+
+  /**
    * 文件必须不含某模式（整文件判断，只报一条）。
    * 用于「没声明 X 就报警」这类 —— 逐行测会每行都命中。
    */
@@ -551,13 +576,29 @@ function firstMatchLine(text, re) {
 }
 
 export function globToRe(g) {
-  const esc = g.replace(/[.+^${}()|[\]\\]/g, '\\$&')
-    .replace(/\*\*/g, '\u0000')
-    .replace(/\*/g, '[^/]*')
-    .replace(/\u0000/g, '.*')
-    .replace(/\?/g, '.');
-  return new RegExp('^' + esc + '$');
+  // 逐字符翻译 glob → 正则。**不要用占位符替换** —— 转义层级一多就会写错
+  // （2026-10-13 踩过：`**/id_rsa` 匹配不到根目录的 `id_rsa`）。
+  //   **/   → 零个或多个目录
+  //   **    → 任意（含 /）
+  //   *     → 单层内任意
+  //   ?     → 单层内一个字符
+  let out = '';
+  let i = 0;
+  while (i < g.length) {
+    const c = g[i];
+    if (c === '*' && g[i + 1] === '*') {
+      if (g[i + 2] === '/') { out += '(?:.*/)?'; i += 3; }
+      else { out += '.*'; i += 2; }
+      continue;
+    }
+    if (c === '*') { out += '[^/]*'; i += 1; continue; }
+    if (c === '?') { out += '[^/]'; i += 1; continue; }
+    out += /[.+^${}()|[\]\\]/.test(c) ? '\\' + c : c;
+    i += 1;
+  }
+  return new RegExp('^' + out + '$');
 }
+
 
 function countBy(arr, fn) {
   const m = {};
