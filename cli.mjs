@@ -61,7 +61,9 @@ export function runCli({ pkgRoot, meta = {} }) {
   }
 
   const root = opt.demo ? demoRoot(pkgRoot) : opt.root;
-  const { findings, stats } = scan({ root, rules });
+  // 演示模式显示友好标签 —— 否则会把我们本机的绝对路径暴露在截图里
+  const rootLabel = opt.demo ? '内置演示样本 · 故意有问题的项目' : null;
+  const { findings, stats } = scan({ root, rootLabel, rules });
 
   if (opt.json) {
     console.log(jsonReport({ findings, stats, meta: META }));

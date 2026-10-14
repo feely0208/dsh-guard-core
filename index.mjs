@@ -435,7 +435,7 @@ const CHECKS = {
  * 执行一次扫描。
  * @returns {{ findings, stats, degraded }}
  */
-export function scan({ root, rules, ignore = [], checkCtx = {} }) {
+export function scan({ root, rules, ignore = [], checkCtx = {}, rootLabel = null }) {
   const { files, skippedDirs, skippedFiles, truncated } = walk(root, { ignore });
   const findings = [];
   const perRule = [];
@@ -497,7 +497,7 @@ export function scan({ root, rules, ignore = [], checkCtx = {} }) {
   findings.sort((a, b) => (order[a.severity] ?? 9) - (order[b.severity] ?? 9));
 
   const stats = {
-    root,
+    root: rootLabel || root,
     scannedFiles: files.length,
     skippedDirs: skippedDirs.length,
     truncated,
