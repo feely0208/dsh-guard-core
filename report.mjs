@@ -30,6 +30,14 @@ export function textReport({ findings, stats, meta = {} }) {
   L.push(`  ${line}`);
   L.push(`  扫描范围   ${stats.root}`);
   L.push(`             ${stats.scannedFiles} 个文件 · ${stats.skippedDirs} 个目录已跳过${stats.truncated ? ' · ⚠️ 已达上限截断' : ''}`);
+  // 假绿防治：把「扫了多少、跳了多少、为什么跳」摆在报告最上面。
+  // 只显示「0 命中」而不显示扫描范围，就是假绿的温床。
+  if (stats.skippedCount) {
+    const byReason = {};
+    for (const x of (stats.skippedFiles || [])) byReason[x.reason] = (byReason[x.reason] || 0) + 1;
+    const detail = Object.entries(byReason).map(([k, v]) => `${k}:${v}`).join(' ');
+    L.push(`  跳过文件   ${stats.skippedCount} 个（${detail}）${stats.skippedDirs?.length ? ` · 跳过目录 ${stats.skippedDirs.length} 个` : ''}`);
+  }
   L.push(`  检查规则   ${stats.rulesRun}/${stats.rulesTotal} 条${
     stats.rulesSkipped ? ` （${stats.rulesSkipped} 条因不适用本项目未运行：${(stats.notApplicable || []).join(', ')}）` : ''
   }${stats.ruleErrors.length ? ` （${stats.ruleErrors.length} 条出错）` : ''}`);

@@ -55,6 +55,7 @@ export function walk(root, { maxFiles = 20000, ignore = [] } = {}) {
   const ignoreList = [...DEFAULT_IGNORE, ...ignore];
   const files = [];
   const skippedDirs = [];
+    const skippedFiles = [];  // 假绿防治：被跳过的文件 + 原因
 
   function rec(dir) {
     let entries;
@@ -97,11 +98,12 @@ export function walk(root, { maxFiles = 20000, ignore = [] } = {}) {
                   basename(e.name).startsWith('.npmrc') ||
                   basename(e.name).startsWith('.gitignore'),
         });
+          if (!files[files.length - 1].isText) skippedFiles.push({ path: rel, reason: 'not-text' });
       }
     }
   }
   rec(root);
-  return { files, skippedDirs, truncated: files.length >= maxFiles };
+  return { files, skippedDirs, skippedFiles, truncated: files.length >= maxFiles };
 }
 
 /** 读文件内容（打码留给 check 层；这里只负责读 + 截断）*/
@@ -434,9 +436,10 @@ const CHECKS = {
  * @returns {{ findings, stats, degraded }}
  */
 export function scan({ root, rules, ignore = [], checkCtx = {} }) {
-  const { files, skippedDirs, truncated } = walk(root, { ignore });
+  const { files, skippedDirs, skippedFiles, truncated } = walk(root, { ignore });
   const findings = [];
   const perRule = [];
+
   const notApplicable = [];
 
   const helpers = {
@@ -502,6 +505,8 @@ export function scan({ root, rules, ignore = [], checkCtx = {} }) {
     rulesRun: perRule.filter((r) => !r.error).length,
     notApplicable,
     rulesSkipped: notApplicable.length,
+    skippedFiles: skippedFiles || [],
+    skippedCount: (skippedFiles || []).length,
     ruleErrors: perRule.filter((r) => r.error),
     findings: findings.length,
     bySeverity: countBy(findings, (f) => f.severity),
