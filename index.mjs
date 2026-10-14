@@ -437,12 +437,33 @@ export function scan({ root, rules, ignore = [], checkCtx = {} }) {
   const { files, skippedDirs, truncated } = walk(root, { ignore });
   const findings = [];
   const perRule = [];
+  const notApplicable = [];
 
   const helpers = {
     collectDependencies(ctx) { return collectDependencies(ctx, root); },
   };
 
+  // 规则级 `when`：只在项目【具备某特征】时才跑这条规则。
+  // 场景：APP 备案检查只在移动端项目里适用，纯 Web 项目跑了就是误报（2026-10-14 实测）。
+  const textCache = new Map();
+  function anyFileHas(pattern, flags) {
+    const re = new RegExp(pattern, flags || 'i');
+    for (const f of files) {
+      if (!f.isText) continue;
+      let t = textCache.get(f.path);
+      if (t === undefined) { t = readText(f); textCache.set(f.path, t); }
+      if (t && re.test(t)) return true;
+    }
+    return false;
+  }
+
   for (const rule of rules) {
+    if (rule.check && rule.check.when && !anyFileHas(rule.check.when, rule.check.whenFlags)) {
+      // 不适用：既不报，也不算「已检查」。记录在 notApplicable 里，
+      // 报告可以说明「N 条规则因不适用该项目而未运行」—— 防止假绿。
+      notApplicable.push(rule.id);
+      continue;
+    }
     const impl = CHECKS[rule.check?.type];
     if (!impl) {
       perRule.push({ id: rule.id, hits: 0, error: `未知 check.type: ${rule.check?.type}` });
@@ -484,7 +505,7 @@ export function scan({ root, rules, ignore = [], checkCtx = {} }) {
     bySeverity: countBy(findings, (f) => f.severity),
   };
 
-  return { findings, stats, perRule };
+  return { findings, stats, perRule, notApplicable };
 }
 
 // ── 依赖收集（多个插件复用）───────────────────────────────────────
