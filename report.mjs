@@ -30,7 +30,9 @@ export function textReport({ findings, stats, meta = {} }) {
   L.push(`  ${line}`);
   L.push(`  扫描范围   ${stats.root}`);
   L.push(`             ${stats.scannedFiles} 个文件 · ${stats.skippedDirs} 个目录已跳过${stats.truncated ? ' · ⚠️ 已达上限截断' : ''}`);
-  L.push(`  检查规则   ${stats.rulesRun}/${stats.rulesTotal} 条${stats.ruleErrors.length ? ` （${stats.ruleErrors.length} 条出错）` : ''}`);
+  L.push(`  检查规则   ${stats.rulesRun}/${stats.rulesTotal} 条${
+    stats.rulesSkipped ? ` （${stats.rulesSkipped} 条因不适用本项目未运行：${(stats.notApplicable || []).join(', ')}）` : ''
+  }${stats.ruleErrors.length ? ` （${stats.ruleErrors.length} 条出错）` : ''}`);
   L.push(`  命中       ${stats.findings} 条`);
   L.push('');
 

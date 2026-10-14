@@ -500,6 +500,8 @@ export function scan({ root, rules, ignore = [], checkCtx = {} }) {
     truncated,
     rulesTotal: rules.length,
     rulesRun: perRule.filter((r) => !r.error).length,
+    notApplicable,
+    rulesSkipped: notApplicable.length,
     ruleErrors: perRule.filter((r) => r.error),
     findings: findings.length,
     bySeverity: countBy(findings, (f) => f.severity),
